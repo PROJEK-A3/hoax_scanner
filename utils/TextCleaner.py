@@ -14,8 +14,8 @@ class TextCleaner:
     
     def Cleaning(self, Text:str): # method untuk membersihkan teks dari karakter(tanda baca) khusus dan angka
         text = self.LowerCase(Text)
-        hasil = re.sub('[^a-zA-Z\s]', '', text)
-        hasil = re.sub('\s+', ' ', hasil).strip()
+        hasil = re.sub(r'[^a-zA-Z\s]', '', text)
+        hasil = re.sub(r'\s+', ' ', hasil).strip()
         hasil = self.RemoveStopWords(hasil)
         hasil = self.Stemmer(hasil)
         return hasil
