@@ -9,10 +9,10 @@ class TextCleaner:
         self.stemmer = factory.create_stemmer()
         
 
-    def LowerCase(self, text): # method untuk mengubah teks menjadi huruf kecil
+    def LowerCase(self, text:str): # method untuk mengubah teks menjadi huruf kecil
         return text.lower()
     
-    def Cleaning(self, Text): # method untuk membersihkan teks dari karakter(tanda baca) khusus dan angka
+    def Cleaning(self, Text:str): # method untuk membersihkan teks dari karakter(tanda baca) khusus dan angka
         text = self.LowerCase(Text)
         hasil = re.sub('[^a-zA-Z\s]', '', text)
         hasil = re.sub('\s+', ' ', hasil).strip()
@@ -20,7 +20,7 @@ class TextCleaner:
         hasil = self.Stemmer(hasil)
         return hasil
     
-    def RemoveStopWords(self, text): # method untuk menghapus stopwords dari teks
+    def RemoveStopWords(self, text:str): # method untuk menghapus stopwords dari teks
         kata = text.split()
         temp = []
         for i in kata:
@@ -30,7 +30,7 @@ class TextCleaner:
         hasil =' '.join(temp)
         return hasil
     
-    def Stemmer(self, text): # method untuk membuat kata menjadi kata dasar
+    def Stemmer(self, text:str): # method untuk membuat kata menjadi kata dasar
         kata = text.split()
         temp = []
         for i in kata:
@@ -39,7 +39,7 @@ class TextCleaner:
         hasil = ' '.join(temp)
         return hasil
     
-    def Tokenize(self, text): # method unuk membuat string menjadi list kata
+    def Tokenize(self, text:str): # method unuk membuat string menjadi list kata
         return text.split()
     
     
