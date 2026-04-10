@@ -28,6 +28,15 @@ class TextCleaner:
         hasil =' '.join(temp)
         return hasil
     
+    def Stemmer(self, text): # method untuk membuat kata menjadi kata dasar
+        kata = text.split()
+        temp = []
+        for i in kata:
+            temp.append(self.stemmer.stem(i))
+        
+        hasil = ' '.join(temp)
+        return hasil
+    
     
     
     
