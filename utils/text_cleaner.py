@@ -37,6 +37,7 @@ class TextCleaner:
         hasil = ' '.join(temp)
         return hasil
     
-    
+    def Tokenize(self, text): # method unuk membuat string menjadi list kata
+        return text.split()
     
     
