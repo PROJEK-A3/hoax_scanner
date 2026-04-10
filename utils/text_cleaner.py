@@ -3,7 +3,7 @@ from Sastrawi.Stemmer.StemmerFactory import StemmerFactory
 import re
 
 class TextCleaner:
-    def Cosntructor (self): #Constructor untuk inisialisasi stopwords dan stemmer
+    def __init__(self): #Constructor untuk inisialisasi stopwords dan stemmer
         self.StopWords = set(stopwords.words('indonesian'))
         factory = StemmerFactory()
         self.stemmer = factory.create_stemmer()
@@ -16,6 +16,8 @@ class TextCleaner:
         text = self.LowerCase(Text)
         hasil = re.sub('[^a-zA-Z\s]', '', text)
         hasil = re.sub('\s+', ' ', hasil).strip()
+        hasil = self.RemoveStopWords(hasil)
+        hasil = self.Stemmer(hasil)
         return hasil
     
     def RemoveStopWords(self, text): # method untuk menghapus stopwords dari teks
@@ -39,5 +41,6 @@ class TextCleaner:
     
     def Tokenize(self, text): # method unuk membuat string menjadi list kata
         return text.split()
+    
     
     
