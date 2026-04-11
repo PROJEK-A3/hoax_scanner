@@ -1,141 +1,215 @@
 """
 core/scraper.py
-Scraping konten artikel dari URL menggunakan newspaper3k.
-newspaper3k secara otomatis menangani:
-  - Download HTML
-  - Ekstraksi judul, teks utama, gambar, author, tanggal
-  - NLP dasar (summary, keywords)
+Tiga fungsi utama scraping untuk HoaxScan:
+  1. scrape_user_url(url)          — scrape artikel dari URL user
+  2. scrape_trusted_sources(title) — cari artikel serupa di 6 sumber terpercaya
+  3. scrape_checkhoax(title)       — cari artikel serupa di situs cek hoax
 """
- 
+
 import logging
+import urllib.parse
+from difflib import SequenceMatcher
+
+import requests
+from bs4 import BeautifulSoup
 from newspaper import Article, Config
- 
+
 logger = logging.getLogger(__name__)
- 
-DEFAULT_CONFIG = Config()
-DEFAULT_CONFIG.browser_user_agent = (
+
+# -----------------------------------------------------------------------
+# Konfigurasi newspaper3k
+# -----------------------------------------------------------------------
+_config = Config()
+_config.browser_user_agent = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/124.0.0.0 Safari/537.36"
 )
-DEFAULT_CONFIG.request_timeout = 10
-DEFAULT_CONFIG.fetch_images = False     # tidak perlu download gambar
-DEFAULT_CONFIG.memoize_articles = False
- 
- 
-class Scraper:
+_config.request_timeout = 10
+_config.fetch_images    = False
+_config.memoize_articles = False
+
+_HEADERS = {"User-Agent": _config.browser_user_agent}
+
+# -----------------------------------------------------------------------
+# 6 Sumber berita terpercaya (search URL-nya)
+# -----------------------------------------------------------------------
+TRUSTED_SOURCES = [
+    ("kompas",       "https://search.kompas.com/search/?q="),
+    ("detik",        "https://www.detik.com/search/searchall?query="),
+    ("tempo",        "https://www.tempo.co/search?q="),
+    ("cnnindonesia", "https://www.cnnindonesia.com/search?query="),
+    ("antaranews",   "https://www.antaranews.com/search/?q="),
+    ("republika",    "https://www.republika.co.id/search/"),
+]
+
+# Situs cek hoax
+CHECKHOAX_SOURCES = [
+    ("turnbackhoax", "https://turnbackhoax.id/?s="),
+    ("cekfakta",     "https://cekfakta.com/?s="),
+]
+
+# Minimal kemiripan judul agar dianggap "sama/mirip"
+SIMILARITY_THRESHOLD = 0.5
+
+
+# =======================================================================
+# FUNGSI 1
+# =======================================================================
+
+def scrape_user_url(url: str) -> dict:
     """
-    Mengambil dan mengekstrak konten artikel dari sebuah URL berita
-    menggunakan library newspaper3k.
- 
-    Attributes:
-        headers (dict): HTTP headers tambahan (User-Agent, dll).
-        timeout (int): Batas waktu request dalam detik.
+    Scrape artikel dari URL yang dikirimkan user.
+
+    Args:
+        url (str): URL berita dari user.
+
+    Returns:
+        dict: {"url": str, "title": str, "content": str}
     """
- 
-    def __init__(self, headers: dict = None, timeout: int = 10):
-        self.headers: dict = headers or {}
-        self.timeout: int = timeout
- 
-        # Buat config newspaper3k
-        self._config = Config()
-        self._config.browser_user_agent = (
-            self.headers.get("User-Agent", DEFAULT_CONFIG.browser_user_agent)
-        )
-        self._config.request_timeout = self.timeout
-        self._config.fetch_images = False
-        self._config.memoize_articles = False
- 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
- 
-    def scrape_url(self, url: str) -> str:
-        """
-        Download dan kembalikan teks utama artikel dari URL.
- 
-        Args:
-            url (str): URL halaman berita.
- 
-        Returns:
-            str: Teks isi artikel. String kosong jika gagal.
-        """
-        article = self._download_and_parse(url)
-        if article is None:
-            return ""
-        return article.text
- 
-    def extract_text(self, html: str) -> str:
-        """
-        Ekstrak teks dari HTML mentah yang sudah ada (tanpa download ulang).
-        Berguna jika HTML sudah diambil sebelumnya (misal dari RSSFetcher).
- 
-        Args:
-            html (str): Konten HTML mentah.
- 
-        Returns:
-            str: Teks artikel hasil ekstraksi.
-        """
-        if not html:
-            return ""
+    article = _fetch_article(url)
+
+    return {
+        "url":     url,
+        "title":   article.title if article else "",
+        "content": article.text  if article else "",
+    }
+
+
+# =======================================================================
+# FUNGSI 2
+# =======================================================================
+
+def scrape_trusted_sources(title: str) -> list[dict]:
+    """
+    Cari artikel berjudul mirip di 6 sumber berita terpercaya,
+    lalu scrape semuanya.
+
+    Args:
+        title (str): Judul dari artikel user (hasil scrape_user_url).
+
+    Returns:
+        list[dict]: List artikel yang cocok.
+                    Tiap item: {"url": str, "title": str, "content": str}
+                    Bisa kosong jika tidak ada yang mirip.
+    """
+    return _search_and_scrape(title, TRUSTED_SOURCES)
+
+
+# =======================================================================
+# FUNGSI 3
+# =======================================================================
+
+def scrape_checkhoax(title: str) -> list[dict]:
+    """
+    Cari artikel berjudul mirip di situs cek hoax,
+    lalu scrape semuanya.
+
+    Args:
+        title (str): Judul dari artikel user (hasil scrape_user_url).
+
+    Returns:
+        list[dict]: List artikel yang cocok.
+                    Tiap item: {"url": str, "title": str, "content": str}
+                    Bisa kosong jika tidak ada yang cocok.
+    """
+    return _search_and_scrape(title, CHECKHOAX_SOURCES)
+
+
+# =======================================================================
+# Helper — dipakai bersama fungsi 2 & 3
+# =======================================================================
+
+def _search_and_scrape(title: str, sources: list[tuple]) -> list[dict]:
+    """
+    Untuk setiap sumber: cari URL kandidat → scrape → filter yang mirip.
+    """
+    results = []
+    query   = _build_query(title)
+
+    for source_name, search_base_url in sources:
         try:
-            article = Article("", config=self._config, language="id")
-            article.set_html(html)
-            article.parse()
-            return article.text
+            candidate_urls = _get_candidate_urls(
+                search_base_url + query,
+                source_name
+            )
+            for url in candidate_urls:
+                article = _fetch_article(url)
+                if article and _is_similar(title, article.title):
+                    logger.info(f"[Scraper] Match ({source_name}): {article.title}")
+                    results.append({
+                        "url":     url,
+                        "title":   article.title,
+                        "content": article.text,
+                    })
         except Exception as e:
-            logger.warning(f"[Scraper] extract_text gagal: {e}")
-            return ""
- 
-    def scrape_full(self, url: str) -> dict:
-        """
-        Download artikel dan kembalikan semua metadata sekaligus.
- 
-        Returns:
-            dict dengan key:
-              - url        : URL artikel
-              - title      : Judul artikel
-              - text       : Isi teks artikel
-              - authors    : List nama penulis
-              - publish_date: Tanggal publikasi (datetime / None)
-              - top_image  : URL gambar utama
-              - success    : True jika teks berhasil diambil
-        """
-        article = self._download_and_parse(url)
-        if article is None:
-            return {
-                "url": url, "title": "", "text": "",
-                "authors": [], "publish_date": None,
-                "top_image": "", "success": False,
-            }
- 
-        return {
-            "url":          url,
-            "title":        article.title or "",
-            "text":         article.text or "",
-            "authors":      article.authors or [],
-            "publish_date": article.publish_date,
-            "top_image":    article.top_image or "",
-            "success":      bool(article.text),
-        }
- 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
- 
-    def _download_and_parse(self, url: str):
-        """
-        Download dan parse artikel dari URL menggunakan newspaper3k.
- 
-        Returns:
-            Article object jika berhasil, None jika gagal.
-        """
-        try:
-            article = Article(url, config=self._config, language="id")
-            article.download()
-            article.parse()
-            logger.info(f"[Scraper] OK: {url}")
-            return article
-        except Exception as e:
-            logger.warning(f"[Scraper] Gagal scrape {url}: {e}")
-            return None
+            logger.warning(f"[Scraper] Error saat cari di {source_name}: {e}")
+
+    logger.info(f"[Scraper] Total hasil dari '{title[:40]}...': {len(results)}")
+    return results
+
+
+def _fetch_article(url: str):
+    """
+    Download dan parse satu artikel pakai newspaper3k.
+    Return Article object, atau None kalau gagal.
+    """
+    try:
+        article = Article(url, config=_config, language="id")
+        article.download()
+        article.parse()
+        return article
+    except Exception as e:
+        logger.warning(f"[Scraper] Gagal fetch {url}: {e}")
+        return None
+
+
+def _get_candidate_urls(search_url: str, source_name: str) -> list[str]:
+    """
+    Ambil URL-URL kandidat dari halaman hasil pencarian.
+    Pakai BeautifulSoup untuk korek semua link artikel.
+    Maksimal 5 URL per sumber.
+    """
+    try:
+        resp = requests.get(search_url, headers=_HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        urls = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if (
+                href.startswith("http")
+                and len(href) > 40          # URL artikel biasanya panjang
+                and href not in urls
+            ):
+                urls.append(href)
+            if len(urls) >= 5:
+                break
+
+        return urls
+
+    except Exception as e:
+        logger.warning(f"[Scraper] Gagal ambil hasil search {search_url}: {e}")
+        return []
+
+
+def _is_similar(title_a: str, title_b: str) -> bool:
+    """
+    Cek apakah dua judul cukup mirip.
+    Pakai SequenceMatcher dengan threshold 0.5.
+    """
+    if not title_a or not title_b:
+        return False
+    ratio = SequenceMatcher(
+        None,
+        title_a.lower().strip(),
+        title_b.lower().strip()
+    ).ratio()
+    return ratio >= SIMILARITY_THRESHOLD
+
+
+def _build_query(title: str) -> str:
+    """Ambil 8 kata pertama judul lalu encode jadi query string."""
+    words = title.strip().split()[:8]
+    return urllib.parse.quote(" ".join(words))
