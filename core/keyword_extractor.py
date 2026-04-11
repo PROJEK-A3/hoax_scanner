@@ -1,4 +1,4 @@
-from utils.TextCleaner import TextCleaner
+from utils.text_cleaner import TextCleaner
 from rake_nltk import Rake
 
 class KeywordExtractor: 
