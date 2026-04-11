@@ -3,7 +3,7 @@ core/scraper.py
 Tiga fungsi utama scraping untuk HoaxScan:
   1. scrape_user_url(url)          — scrape artikel dari URL user
   2. scrape_trusted_sources(title) — cari artikel serupa di 6 sumber terpercaya
-  3. scrape_checkhoax(title)       — cari artikel serupa di situs cek hoax
+  3. scrape_checkhoax(title)       — cari artikel serupa di Komdigi klarifikasi hoaks
 """
 
 import logging
@@ -26,7 +26,7 @@ _config.browser_user_agent = (
     "Chrome/124.0.0.0 Safari/537.36"
 )
 _config.request_timeout = 10
-_config.fetch_images    = False
+_config.fetch_images     = False
 _config.memoize_articles = False
 
 _HEADERS = {"User-Agent": _config.browser_user_agent}
@@ -43,11 +43,8 @@ TRUSTED_SOURCES = [
     ("republika",    "https://www.republika.co.id/search/"),
 ]
 
-# Situs cek hoax
-CHECKHOAX_SOURCES = [
-    ("turnbackhoax", "https://turnbackhoax.id/?s="),
-    ("cekfakta",     "https://cekfakta.com/?s="),
-]
+# Komdigi — halaman listing klarifikasi hoaks (bukan search, tapi listing)
+KOMDIGI_URL = "https://www.komdigi.go.id/berita/klarifikasi-hoaks"
 
 # Minimal kemiripan judul agar dianggap "sama/mirip"
 SIMILARITY_THRESHOLD = 0.5
@@ -86,7 +83,7 @@ def scrape_trusted_sources(title: str) -> list[dict]:
     lalu scrape semuanya.
 
     Args:
-        title (str): Judul dari artikel user (hasil scrape_user_url).
+        title (str): Judul artikel user (dari scrape_user_url).
 
     Returns:
         list[dict]: List artikel yang cocok.
@@ -102,18 +99,46 @@ def scrape_trusted_sources(title: str) -> list[dict]:
 
 def scrape_checkhoax(title: str) -> list[dict]:
     """
-    Cari artikel berjudul mirip di situs cek hoax,
+    Cari artikel berjudul mirip di halaman klarifikasi hoaks Komdigi,
     lalu scrape semuanya.
 
+    Komdigi tidak punya fitur search, jadi caranya:
+    1. Buka halaman listing klarifikasi-hoaks
+    2. Ambil semua judul + link artikel yang ada di sana
+    3. Filter yang judulnya mirip dengan title user
+    4. Scrape artikel yang lolos filter
+
     Args:
-        title (str): Judul dari artikel user (hasil scrape_user_url).
+        title (str): Judul artikel user (dari scrape_user_url).
 
     Returns:
-        list[dict]: List artikel yang cocok.
+        list[dict]: List artikel hoax yang cocok.
                     Tiap item: {"url": str, "title": str, "content": str}
-                    Bisa kosong jika tidak ada yang cocok.
+                    Kosong jika tidak ada yang mirip.
     """
-    return _search_and_scrape(title, CHECKHOAX_SOURCES)
+    results = []
+
+    try:
+        # Ambil semua pasangan (judul, url) dari halaman listing Komdigi
+        candidates = _get_komdigi_listing()
+        logger.info(f"[Scraper] Komdigi: {len(candidates)} artikel ditemukan di listing")
+
+        for candidate_title, candidate_url in candidates:
+            if _is_similar(title, candidate_title):
+                logger.info(f"[Scraper] Komdigi match: {candidate_title}")
+                article = _fetch_article(candidate_url)
+                if article:
+                    results.append({
+                        "url":     candidate_url,
+                        "title":   article.title or candidate_title,
+                        "content": article.text or "",
+                    })
+
+    except Exception as e:
+        logger.warning(f"[Scraper] Gagal scrape Komdigi: {e}")
+
+    logger.info(f"[Scraper] Total hasil Komdigi: {len(results)}")
+    return results
 
 
 # =======================================================================
@@ -122,17 +147,15 @@ def scrape_checkhoax(title: str) -> list[dict]:
 
 def _search_and_scrape(title: str, sources: list[tuple]) -> list[dict]:
     """
-    Untuk setiap sumber: cari URL kandidat → scrape → filter yang mirip.
+    Untuk setiap sumber: buka halaman search -> ambil URL kandidat
+    -> scrape satu-satu -> filter yang judulnya mirip.
     """
     results = []
     query   = _build_query(title)
 
     for source_name, search_base_url in sources:
         try:
-            candidate_urls = _get_candidate_urls(
-                search_base_url + query,
-                source_name
-            )
+            candidate_urls = _get_candidate_urls(search_base_url + query)
             for url in candidate_urls:
                 article = _fetch_article(url)
                 if article and _is_similar(title, article.title):
@@ -143,10 +166,67 @@ def _search_and_scrape(title: str, sources: list[tuple]) -> list[dict]:
                         "content": article.text,
                     })
         except Exception as e:
-            logger.warning(f"[Scraper] Error saat cari di {source_name}: {e}")
+            logger.warning(f"[Scraper] Error di {source_name}: {e}")
 
-    logger.info(f"[Scraper] Total hasil dari '{title[:40]}...': {len(results)}")
+    logger.info(f"[Scraper] Total hasil trusted sources: {len(results)}")
     return results
+
+
+def _get_komdigi_listing() -> list[tuple]:
+    """
+    Ambil semua pasangan (judul, url) dari halaman listing Komdigi.
+    Return list of tuple: [(judul, url), ...]
+    """
+    resp = requests.get(KOMDIGI_URL, headers=_HEADERS, timeout=10)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "lxml")
+
+    items = []
+    for a in soup.find_all("a", href=True):
+        href  = a["href"]
+        judul = a.get_text(strip=True)
+
+        # Ambil hanya link artikel Komdigi yang punya judul cukup panjang
+        if (
+            "komdigi.go.id" in href
+            and "/berita/" in href
+            and len(judul) > 20
+        ):
+            # Pastikan URL lengkap
+            if not href.startswith("http"):
+                href = "https://www.komdigi.go.id" + href
+            items.append((judul, href))
+
+    return items
+
+
+def _get_candidate_urls(search_url: str) -> list[str]:
+    """
+    Ambil URL kandidat dari halaman hasil pencarian portal berita.
+    Maksimal 5 URL.
+    """
+    try:
+        resp = requests.get(search_url, headers=_HEADERS, timeout=10)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "lxml")
+
+        urls = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if (
+                href.startswith("http")
+                and len(href) > 40
+                and href not in urls
+            ):
+                urls.append(href)
+            if len(urls) >= 5:
+                break
+
+        return urls
+
+    except Exception as e:
+        logger.warning(f"[Scraper] Gagal ambil hasil search {search_url}: {e}")
+        return []
 
 
 def _fetch_article(url: str):
@@ -164,40 +244,10 @@ def _fetch_article(url: str):
         return None
 
 
-def _get_candidate_urls(search_url: str, source_name: str) -> list[str]:
-    """
-    Ambil URL-URL kandidat dari halaman hasil pencarian.
-    Pakai BeautifulSoup untuk korek semua link artikel.
-    Maksimal 5 URL per sumber.
-    """
-    try:
-        resp = requests.get(search_url, headers=_HEADERS, timeout=10)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-
-        urls = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if (
-                href.startswith("http")
-                and len(href) > 40          # URL artikel biasanya panjang
-                and href not in urls
-            ):
-                urls.append(href)
-            if len(urls) >= 5:
-                break
-
-        return urls
-
-    except Exception as e:
-        logger.warning(f"[Scraper] Gagal ambil hasil search {search_url}: {e}")
-        return []
-
-
 def _is_similar(title_a: str, title_b: str) -> bool:
     """
-    Cek apakah dua judul cukup mirip.
-    Pakai SequenceMatcher dengan threshold 0.5.
+    Cek apakah dua judul cukup mirip pakai SequenceMatcher.
+    Threshold default: 0.5 (50%).
     """
     if not title_a or not title_b:
         return False
@@ -210,6 +260,6 @@ def _is_similar(title_a: str, title_b: str) -> bool:
 
 
 def _build_query(title: str) -> str:
-    """Ambil 8 kata pertama judul lalu encode jadi query string."""
+    """Ambil 8 kata pertama judul lalu encode jadi query string URL."""
     words = title.strip().split()[:8]
     return urllib.parse.quote(" ".join(words))
