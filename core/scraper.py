@@ -1,173 +1,141 @@
 """
 core/scraper.py
-Scraping konten artikel dari URL menggunakan requests + BeautifulSoup.
+Scraping konten artikel dari URL menggunakan newspaper3k.
+newspaper3k secara otomatis menangani:
+  - Download HTML
+  - Ekstraksi judul, teks utama, gambar, author, tanggal
+  - NLP dasar (summary, keywords)
 """
-
+ 
 import logging
-import re
-import time
-from typing import Optional
-
-import requests
-from bs4 import BeautifulSoup
-
+from newspaper import Article, Config
+ 
 logger = logging.getLogger(__name__)
-
-
-# Selector konten utama untuk portal berita Indonesia yang umum
-CONTENT_SELECTORS = [
-    # Selektor spesifik per portal (lebih akurat)
-    {"name": "article", "class_": re.compile(r"article[-_]?(body|content|text)", re.I)},
-    {"name": "div",     "class_": re.compile(r"detail[-_]?(text|body|content)", re.I)},
-    {"name": "div",     "class_": re.compile(r"post[-_]?(body|content)", re.I)},
-    {"name": "div",     "itemprop": "articleBody"},
-    # Fallback generik
-    {"name": "article"},
-    {"name": "main"},
-]
-
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-# Tag yang tidak mengandung konten artikel
-NOISE_TAGS = [
-    "script", "style", "noscript", "iframe",
-    "nav", "header", "footer", "aside",
-    "figure", "figcaption", "form", "button",
-    "ins",   # iklan Google AdSense
-]
-
-
+ 
+DEFAULT_CONFIG = Config()
+DEFAULT_CONFIG.browser_user_agent = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+DEFAULT_CONFIG.request_timeout = 10
+DEFAULT_CONFIG.fetch_images = False     # tidak perlu download gambar
+DEFAULT_CONFIG.memoize_articles = False
+ 
+ 
 class Scraper:
     """
-    Mengambil dan mengekstrak teks konten artikel dari sebuah URL berita.
-
+    Mengambil dan mengekstrak konten artikel dari sebuah URL berita
+    menggunakan library newspaper3k.
+ 
     Attributes:
-        headers (dict): HTTP headers yang digunakan saat request.
+        headers (dict): HTTP headers tambahan (User-Agent, dll).
         timeout (int): Batas waktu request dalam detik.
     """
-
-    def __init__(
-        self,
-        headers: Optional[dict] = None,
-        timeout: int = 10,
-    ):
-        self.headers: dict = headers if headers is not None else DEFAULT_HEADERS
+ 
+    def __init__(self, headers: dict = None, timeout: int = 10):
+        self.headers: dict = headers or {}
         self.timeout: int = timeout
-        self._session = requests.Session()
-        self._session.headers.update(self.headers)
-
+ 
+        # Buat config newspaper3k
+        self._config = Config()
+        self._config.browser_user_agent = (
+            self.headers.get("User-Agent", DEFAULT_CONFIG.browser_user_agent)
+        )
+        self._config.request_timeout = self.timeout
+        self._config.fetch_images = False
+        self._config.memoize_articles = False
+ 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
-
+ 
     def scrape_url(self, url: str) -> str:
         """
-        Ambil HTML mentah dari URL.
-
+        Download dan kembalikan teks utama artikel dari URL.
+ 
         Args:
             url (str): URL halaman berita.
-
+ 
         Returns:
-            str: Konten HTML halaman. String kosong jika gagal.
+            str: Teks isi artikel. String kosong jika gagal.
         """
-        try:
-            response = self._session.get(url, timeout=self.timeout, allow_redirects=True)
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding  # deteksi encoding otomatis
-            logger.info(f"[Scraper] OK ({response.status_code}): {url}")
-            return response.text
-        except requests.exceptions.Timeout:
-            logger.warning(f"[Scraper] Timeout: {url}")
-        except requests.exceptions.TooManyRedirects:
-            logger.warning(f"[Scraper] Too many redirects: {url}")
-        except requests.exceptions.HTTPError as e:
-            logger.warning(f"[Scraper] HTTP error {e.response.status_code}: {url}")
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[Scraper] Request gagal: {e}")
-        return ""
-
+        article = self._download_and_parse(url)
+        if article is None:
+            return ""
+        return article.text
+ 
     def extract_text(self, html: str) -> str:
         """
-        Ekstrak teks bersih dari HTML artikel.
-
+        Ekstrak teks dari HTML mentah yang sudah ada (tanpa download ulang).
+        Berguna jika HTML sudah diambil sebelumnya (misal dari RSSFetcher).
+ 
         Args:
             html (str): Konten HTML mentah.
-
+ 
         Returns:
-            str: Teks artikel yang sudah dibersihkan dari noise.
+            str: Teks artikel hasil ekstraksi.
         """
         if not html:
             return ""
-
-        soup = BeautifulSoup(html, "lxml")
-
-        # Hapus elemen noise terlebih dahulu
-        for tag in soup(NOISE_TAGS):
-            tag.decompose()
-
-        # Coba temukan konten utama artikel
-        content_element = self._find_content_element(soup)
-
-        if content_element:
-            paragraphs = content_element.find_all("p")
-            if paragraphs:
-                text = " ".join(p.get_text(separator=" ") for p in paragraphs)
-            else:
-                text = content_element.get_text(separator=" ")
-        else:
-            # Fallback: ambil semua <p> di halaman
-            paragraphs = soup.find_all("p")
-            text = " ".join(p.get_text(separator=" ") for p in paragraphs)
-
-        return self._clean_whitespace(text)
-
+        try:
+            article = Article("", config=self._config, language="id")
+            article.set_html(html)
+            article.parse()
+            return article.text
+        except Exception as e:
+            logger.warning(f"[Scraper] extract_text gagal: {e}")
+            return ""
+ 
     def scrape_full(self, url: str) -> dict:
         """
-        Helper: fetch + extract sekaligus. Kembalikan dict lengkap.
-
+        Download artikel dan kembalikan semua metadata sekaligus.
+ 
         Returns:
-            dict: {url, title, text, success}
+            dict dengan key:
+              - url        : URL artikel
+              - title      : Judul artikel
+              - text       : Isi teks artikel
+              - authors    : List nama penulis
+              - publish_date: Tanggal publikasi (datetime / None)
+              - top_image  : URL gambar utama
+              - success    : True jika teks berhasil diambil
         """
-        html = self.scrape_url(url)
-        if not html:
-            return {"url": url, "title": "", "text": "", "success": False}
-
-        soup = BeautifulSoup(html, "lxml")
-        title = soup.title.string.strip() if soup.title else ""
-        text  = self.extract_text(html)
-
+        article = self._download_and_parse(url)
+        if article is None:
+            return {
+                "url": url, "title": "", "text": "",
+                "authors": [], "publish_date": None,
+                "top_image": "", "success": False,
+            }
+ 
         return {
-            "url":     url,
-            "title":   title,
-            "text":    text,
-            "success": bool(text),
+            "url":          url,
+            "title":        article.title or "",
+            "text":         article.text or "",
+            "authors":      article.authors or [],
+            "publish_date": article.publish_date,
+            "top_image":    article.top_image or "",
+            "success":      bool(article.text),
         }
-
+ 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-
-    def _find_content_element(self, soup: BeautifulSoup):
+ 
+    def _download_and_parse(self, url: str):
         """
-        Cari elemen HTML yang paling mungkin berisi konten artikel
-        berdasarkan CONTENT_SELECTORS yang telah didefinisikan.
+        Download dan parse artikel dari URL menggunakan newspaper3k.
+ 
+        Returns:
+            Article object jika berhasil, None jika gagal.
         """
-        for selector in CONTENT_SELECTORS:
-            element = soup.find(**selector)
-            if element:
-                return element
-        return None
-
-    @staticmethod
-    def _clean_whitespace(text: str) -> str:
-        """Normalisasi whitespace berlebih."""
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
+        try:
+            article = Article(url, config=self._config, language="id")
+            article.download()
+            article.parse()
+            logger.info(f"[Scraper] OK: {url}")
+            return article
+        except Exception as e:
+            logger.warning(f"[Scraper] Gagal scrape {url}: {e}")
+            return None
