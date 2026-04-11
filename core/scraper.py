@@ -44,7 +44,8 @@ TRUSTED_SOURCES = [
 ]
 
 # Komdigi — halaman listing klarifikasi hoaks (bukan search, tapi listing)
-KOMDIGI_URL = "https://www.komdigi.go.id/berita/klarifikasi-hoaks"
+KOMDIGI_URL     = "https://www.komdigi.go.id/berita/klarifikasi-hoaks"
+TURNBACKHOAX_URL = "https://turnbackhoax.id/?s="
 
 # Minimal kemiripan judul agar dianggap "sama/mirip"
 SIMILARITY_THRESHOLD = 0.5
@@ -118,14 +119,11 @@ def scrape_checkhoax(title: str) -> list[dict]:
     """
     results = []
 
+    # --- Komdigi (listing) ---
     try:
-        # Ambil semua pasangan (judul, url) dari halaman listing Komdigi
         candidates = _get_komdigi_listing()
-        logger.info(f"[Scraper] Komdigi: {len(candidates)} artikel ditemukan di listing")
-
         for candidate_title, candidate_url in candidates:
             if _is_similar(title, candidate_title):
-                logger.info(f"[Scraper] Komdigi match: {candidate_title}")
                 article = _fetch_article(candidate_url)
                 if article:
                     results.append({
@@ -133,11 +131,25 @@ def scrape_checkhoax(title: str) -> list[dict]:
                         "title":   article.title or candidate_title,
                         "content": article.text or "",
                     })
-
     except Exception as e:
         logger.warning(f"[Scraper] Gagal scrape Komdigi: {e}")
 
-    logger.info(f"[Scraper] Total hasil Komdigi: {len(results)}")
+    # --- TurnBackHoax (search) ---
+    try:
+        query = _build_query(title)
+        candidate_urls = _get_candidate_urls(TURNBACKHOAX_URL + query)
+        for url in candidate_urls:
+            article = _fetch_article(url)
+            if article and _is_similar(title, article.title):
+                results.append({
+                    "url":     url,
+                    "title":   article.title,
+                    "content": article.text,
+                })
+    except Exception as e:
+        logger.warning(f"[Scraper] Gagal scrape TurnBackHoax: {e}")
+
+    logger.info(f"[Scraper] Total hasil checkhoax: {len(results)}")
     return results
 
 
