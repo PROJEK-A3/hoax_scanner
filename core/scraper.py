@@ -1,173 +1,135 @@
-"""
-core/scraper.py
-Scraping konten artikel dari URL menggunakan requests + BeautifulSoup.
-"""
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 
-import logging
-import re
-import time
-from typing import Optional
+from newspaper import Article
+from newspaper import Config
 
-import requests
-from bs4 import BeautifulSoup
+import yake
 
-logger = logging.getLogger(__name__)
-
-
-# Selector konten utama untuk portal berita Indonesia yang umum
-CONTENT_SELECTORS = [
-    # Selektor spesifik per portal (lebih akurat)
-    {"name": "article", "class_": re.compile(r"article[-_]?(body|content|text)", re.I)},
-    {"name": "div",     "class_": re.compile(r"detail[-_]?(text|body|content)", re.I)},
-    {"name": "div",     "class_": re.compile(r"post[-_]?(body|content)", re.I)},
-    {"name": "div",     "itemprop": "articleBody"},
-    # Fallback generik
-    {"name": "article"},
-    {"name": "main"},
-]
-
-DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-}
-
-# Tag yang tidak mengandung konten artikel
-NOISE_TAGS = [
-    "script", "style", "noscript", "iframe",
-    "nav", "header", "footer", "aside",
-    "figure", "figcaption", "form", "button",
-    "ins",   # iklan Google AdSense
-]
-
+config = Config()
+config.request_timeout = 10
 
 class Scraper:
-    """
-    Mengambil dan mengekstrak teks konten artikel dari sebuah URL berita.
+    def __init__(self):
+        pass
 
-    Attributes:
-        headers (dict): HTTP headers yang digunakan saat request.
-        timeout (int): Batas waktu request dalam detik.
-    """
+    def scrape_url(self,url):
+        article = Article(url)
+        article.download()
+        article.parse()
 
-    def __init__(
-        self,
-        headers: Optional[dict] = None,
-        timeout: int = 10,
-    ):
-        self.headers: dict = headers if headers is not None else DEFAULT_HEADERS
-        self.timeout: int = timeout
-        self._session = requests.Session()
-        self._session.headers.update(self.headers)
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    def scrape_url(self, url: str) -> str:
-        """
-        Ambil HTML mentah dari URL.
-
-        Args:
-            url (str): URL halaman berita.
-
-        Returns:
-            str: Konten HTML halaman. String kosong jika gagal.
-        """
-        try:
-            response = self._session.get(url, timeout=self.timeout, allow_redirects=True)
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding  # deteksi encoding otomatis
-            logger.info(f"[Scraper] OK ({response.status_code}): {url}")
-            return response.text
-        except requests.exceptions.Timeout:
-            logger.warning(f"[Scraper] Timeout: {url}")
-        except requests.exceptions.TooManyRedirects:
-            logger.warning(f"[Scraper] Too many redirects: {url}")
-        except requests.exceptions.HTTPError as e:
-            logger.warning(f"[Scraper] HTTP error {e.response.status_code}: {url}")
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"[Scraper] Request gagal: {e}")
-        return ""
-
-    def extract_text(self, html: str) -> str:
-        """
-        Ekstrak teks bersih dari HTML artikel.
-
-        Args:
-            html (str): Konten HTML mentah.
-
-        Returns:
-            str: Teks artikel yang sudah dibersihkan dari noise.
-        """
-        if not html:
-            return ""
-
-        soup = BeautifulSoup(html, "lxml")
-
-        # Hapus elemen noise terlebih dahulu
-        for tag in soup(NOISE_TAGS):
-            tag.decompose()
-
-        # Coba temukan konten utama artikel
-        content_element = self._find_content_element(soup)
-
-        if content_element:
-            paragraphs = content_element.find_all("p")
-            if paragraphs:
-                text = " ".join(p.get_text(separator=" ") for p in paragraphs)
-            else:
-                text = content_element.get_text(separator=" ")
-        else:
-            # Fallback: ambil semua <p> di halaman
-            paragraphs = soup.find_all("p")
-            text = " ".join(p.get_text(separator=" ") for p in paragraphs)
-
-        return self._clean_whitespace(text)
-
-    def scrape_full(self, url: str) -> dict:
-        """
-        Helper: fetch + extract sekaligus. Kembalikan dict lengkap.
-
-        Returns:
-            dict: {url, title, text, success}
-        """
-        html = self.scrape_url(url)
-        if not html:
-            return {"url": url, "title": "", "text": "", "success": False}
-
-        soup = BeautifulSoup(html, "lxml")
-        title = soup.title.string.strip() if soup.title else ""
-        text  = self.extract_text(html)
+        title = article.title
+        content = article.text
 
         return {
-            "url":     url,
-            "title":   title,
-            "text":    text,
-            "success": bool(text),
+            "url": url,
+            "title": title,
+            "content": content
         }
 
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
+    def scrape_trusted_sources(self, title):
+        kw_extractor  = yake.KeywordExtractor(
+        lan="id",
+        n=3,
+        top=3
+        )
 
-    def _find_content_element(self, soup: BeautifulSoup):
-        """
-        Cari elemen HTML yang paling mungkin berisi konten artikel
-        berdasarkan CONTENT_SELECTORS yang telah didefinisikan.
-        """
-        for selector in CONTENT_SELECTORS:
-            element = soup.find(**selector)
-            if element:
-                return element
-        return None
+        title_kw = kw_extractor.extract_keywords(title)
 
-    @staticmethod
-    def _clean_whitespace(text: str) -> str:
-        """Normalisasi whitespace berlebih."""
-        text = re.sub(r"\s+", " ", text)
-        return text.strip()
+        TRUSTED_SOURCES = [
+            ("republika",  "news-title",   "https://www.republika.co.id/search/v3/?q="),
+            ("kompas",     "article-link", "https://search.kompas.com/search/?q="),
+            ("detik",      "media__link",  "https://www.detik.com/search/searchall?query="),
+            ("tempo",      "contents",     "https://www.tempo.co/search?q="),
+            ("antaranews", "h5",           "https://www.antaranews.com/search/?q="),
+        ]
+        SPECIAL_MEDIA_LAYOUTS = ["tempo", "antaranews", "republika"]
+
+        
+        
+        driver = webdriver.Chrome()
+
+        links = []
+        for source in TRUSTED_SOURCES:
+            source_media = source[0]
+            source_element = source[1]
+            source_url = source[2]
+
+            for kw in title_kw:
+                final_url = source_url + kw[0] + "&search_type=relevansi"
+                if source_media == "detik":
+                    final_url = source_url + kw[0] + "&result_type=relevansi"
+
+                driver.get(final_url)
+
+                if source_media in SPECIAL_MEDIA_LAYOUTS:
+                    articles = []
+                    contents = driver.find_elements(By.CLASS_NAME, source_element)
+                    for content in contents:
+                        articles.append(content.find_element(By.TAG_NAME, "a"))
+                else:
+                    articles = driver.find_elements(By.CLASS_NAME, source_element)
+                
+                for article in articles:
+                    link = article.get_attribute("href")
+                    links.append(link)
+
+                    if len(links) > 5:
+                        break
+
+        driver.close()
+
+        links = set(links)
+
+        result = []
+        for link in links:
+            result.append(self.scrape_url(link))
+
+        return result
+
+    def scrape_checkhoax(self, title):
+        kw_extractor  = yake.KeywordExtractor(
+        lan="id",
+        n=3,
+        top=3
+        )
+
+        title_kw = kw_extractor.extract_keywords(title)
+
+        HOAXCHECK_SOURCES = [
+            ("checkfakta", "content", "https://cekfakta.com/api-search?_token=LOHO3l0gWBz623sumAjWXdJ7UY40fIe3Reu5AiRC&search=")
+        ]
+        
+        driver = webdriver.Chrome()
+
+        links = []
+        for source in HOAXCHECK_SOURCES:
+            source_element = source[1]
+            source_url = source[2]
+
+            for kw in title_kw:
+                final_url = source_url + kw[0]
+
+                driver.get(final_url)
+
+                articles = []
+                contents = driver.find_elements(By.CLASS_NAME, source_element)
+                for content in contents:
+                    articles.append(content.find_element(By.TAG_NAME, "a"))
+                
+                for article in articles:
+                    link = article.get_attribute("href")
+                    links.append(link)
+
+                    if len(links) > 5:
+                        break
+
+        driver.close()
+
+        links = set(links)
+
+        result = []
+        for link in links:
+            result.append(self.scrape_url(link))
+
+        return result

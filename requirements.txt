@@ -1,3 +1,6 @@
 newspaper3k
 pyqt5
 requests
+yake
+lxml_html_clean
+selenium

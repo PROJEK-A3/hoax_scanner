@@ -29,7 +29,7 @@ class SimilarityEngine:
         """
         Hitung cosine similarity antara dua teks.
 
-        Args:
+        Parameters:
             text_a: Teks pertama (input user)
             text_b: Teks kedua (artikel pembanding)
 
@@ -57,7 +57,7 @@ class SimilarityEngine:
         Bandingkan teks input dengan banyak artikel sekaligus.
         Lebih efisien dari compute() karena vectorizer di-fit satu kali.
 
-        Args:
+        Parameters:
             input_text: Teks berita yang ingin diverifikasi
             articles:   list[dict] dengan key 'judul', 'konten', 'url', 'sumber'
 
