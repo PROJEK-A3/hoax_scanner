@@ -1,277 +1,131 @@
-"""
-core/scraper.py
-Tiga fungsi utama scraping untuk HoaxScan:
-  1. scrape_user_url(url)          — scrape artikel dari URL user
-  2. scrape_trusted_sources(title) — cari artikel serupa di 6 sumber terpercaya
-  3. scrape_checkhoax(title)       — cari artikel serupa di Komdigi klarifikasi hoaks
-"""
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 
-import logging
-import urllib.parse
-from difflib import SequenceMatcher
+from newspaper import Article
+from newspaper import Config
 
-import requests
-from bs4 import BeautifulSoup
-from newspaper import Article, Config
+import yake
 
-logger = logging.getLogger(__name__)
+config = Config()
+config.request_timeout = 10
 
-# -----------------------------------------------------------------------
-# Konfigurasi newspaper3k
-# -----------------------------------------------------------------------
-_config = Config()
-_config.browser_user_agent = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
-)
-_config.request_timeout = 10
-_config.fetch_images     = False
-_config.memoize_articles = False
+def scrape_url(url):
+    article = Article(url)
+    article.download()
+    article.parse()
 
-_HEADERS = {"User-Agent": _config.browser_user_agent}
-
-# -----------------------------------------------------------------------
-# 6 Sumber berita terpercaya (search URL-nya)
-# -----------------------------------------------------------------------
-TRUSTED_SOURCES = [
-    ("kompas",       "https://search.kompas.com/search/?q="),
-    ("detik",        "https://www.detik.com/search/searchall?query="),
-    ("tempo",        "https://www.tempo.co/search?q="),
-    ("cnnindonesia", "https://www.cnnindonesia.com/search?query="),
-    ("antaranews",   "https://www.antaranews.com/search/?q="),
-    ("republika",    "https://www.republika.co.id/search/"),
-]
-
-# Komdigi — halaman listing klarifikasi hoaks (bukan search, tapi listing)
-KOMDIGI_URL     = "https://www.komdigi.go.id/berita/klarifikasi-hoaks"
-TURNBACKHOAX_URL = "https://turnbackhoax.id/?s="
-
-# Minimal kemiripan judul agar dianggap "sama/mirip"
-SIMILARITY_THRESHOLD = 0.5
-
-
-# =======================================================================
-# FUNGSI 1
-# =======================================================================
-
-def scrape_user_url(url: str) -> dict:
-    """
-    Scrape artikel dari URL yang dikirimkan user.
-
-    Args:
-        url (str): URL berita dari user.
-
-    Returns:
-        dict: {"url": str, "title": str, "content": str}
-    """
-    article = _fetch_article(url)
+    title = article.title
+    content = article.text
 
     return {
-        "url":     url,
-        "title":   article.title if article else "",
-        "content": article.text  if article else "",
+        "url": url,
+        "title": title,
+        "content": content
     }
 
+def scrape_trusted_sources(title):
+    kw_extractor  = yake.KeywordExtractor(
+      lan="id",
+      n=3,
+      top=3
+    )
 
-# =======================================================================
-# FUNGSI 2
-# =======================================================================
+    title_kw = kw_extractor.extract_keywords(title)
 
-def scrape_trusted_sources(title: str) -> list[dict]:
-    """
-    Cari artikel berjudul mirip di 6 sumber berita terpercaya,
-    lalu scrape semuanya.
+    TRUSTED_SOURCES = [
+        ("republika",  "news-title",   "https://www.republika.co.id/search/v3/?q="),
+        ("kompas",     "article-link", "https://search.kompas.com/search/?q="),
+        ("detik",      "media__link",  "https://www.detik.com/search/searchall?query="),
+        ("tempo",      "contents",     "https://www.tempo.co/search?q="),
+        ("antaranews", "h5",           "https://www.antaranews.com/search/?q="),
+    ]
+    SPECIAL_MEDIA_LAYOUTS = ["tempo", "antaranews", "republika"]
 
-    Args:
-        title (str): Judul artikel user (dari scrape_user_url).
+    
+    
+    driver = webdriver.Chrome()
 
-    Returns:
-        list[dict]: List artikel yang cocok.
-                    Tiap item: {"url": str, "title": str, "content": str}
-                    Bisa kosong jika tidak ada yang mirip.
-    """
-    return _search_and_scrape(title, TRUSTED_SOURCES)
+    links = []
+    for source in TRUSTED_SOURCES:
+        source_media = source[0]
+        source_element = source[1]
+        source_url = source[2]
 
+        for kw in title_kw:
+            final_url = source_url + kw[0] + "&search_type=relevansi"
+            if source_media == "detik":
+                final_url = source_url + kw[0] + "&result_type=relevansi"
 
-# =======================================================================
-# FUNGSI 3
-# =======================================================================
+            driver.get(final_url)
 
-def scrape_checkhoax(title: str) -> list[dict]:
-    """
-    Cari artikel berjudul mirip di halaman klarifikasi hoaks Komdigi,
-    lalu scrape semuanya.
+            if source_media in SPECIAL_MEDIA_LAYOUTS:
+                articles = []
+                contents = driver.find_elements(By.CLASS_NAME, source_element)
+                for content in contents:
+                    articles.append(content.find_element(By.TAG_NAME, "a"))
+            else:
+                articles = driver.find_elements(By.CLASS_NAME, source_element)
+            
+            for article in articles:
+                link = article.get_attribute("href")
+                links.append(link)
 
-    Komdigi tidak punya fitur search, jadi caranya:
-    1. Buka halaman listing klarifikasi-hoaks
-    2. Ambil semua judul + link artikel yang ada di sana
-    3. Filter yang judulnya mirip dengan title user
-    4. Scrape artikel yang lolos filter
+                if len(links) > 5:
+                    break
 
-    Args:
-        title (str): Judul artikel user (dari scrape_user_url).
+    driver.close()
 
-    Returns:
-        list[dict]: List artikel hoax yang cocok.
-                    Tiap item: {"url": str, "title": str, "content": str}
-                    Kosong jika tidak ada yang mirip.
-    """
-    results = []
+    links = set(links)
 
-    # --- Komdigi (listing) ---
-    try:
-        candidates = _get_komdigi_listing()
-        for candidate_title, candidate_url in candidates:
-            if _is_similar(title, candidate_title):
-                article = _fetch_article(candidate_url)
-                if article:
-                    results.append({
-                        "url":     candidate_url,
-                        "title":   article.title or candidate_title,
-                        "content": article.text or "",
-                    })
-    except Exception as e:
-        logger.warning(f"[Scraper] Gagal scrape Komdigi: {e}")
+    result = []
+    for link in links:
+        result.append(scrape_url(link))
 
-    # --- TurnBackHoax (search) ---
-    try:
-        query = _build_query(title)
-        candidate_urls = _get_candidate_urls(TURNBACKHOAX_URL + query)
-        for url in candidate_urls:
-            article = _fetch_article(url)
-            if article and _is_similar(title, article.title):
-                results.append({
-                    "url":     url,
-                    "title":   article.title,
-                    "content": article.text,
-                })
-    except Exception as e:
-        logger.warning(f"[Scraper] Gagal scrape TurnBackHoax: {e}")
+    return result
 
-    logger.info(f"[Scraper] Total hasil checkhoax: {len(results)}")
-    return results
+def scrape_checkhoax(title):
+    kw_extractor  = yake.KeywordExtractor(
+      lan="id",
+      n=3,
+      top=3
+    )
 
+    title_kw = kw_extractor.extract_keywords(title)
 
-# =======================================================================
-# Helper — dipakai bersama fungsi 2 & 3
-# =======================================================================
+    HOAXCHECK_SOURCES = [
+        ("checkfakta", "content", "https://cekfakta.com/api-search?_token=LOHO3l0gWBz623sumAjWXdJ7UY40fIe3Reu5AiRC&search=")
+    ]
+    
+    driver = webdriver.Chrome()
 
-def _search_and_scrape(title: str, sources: list[tuple]) -> list[dict]:
-    """
-    Untuk setiap sumber: buka halaman search -> ambil URL kandidat
-    -> scrape satu-satu -> filter yang judulnya mirip.
-    """
-    results = []
-    query   = _build_query(title)
+    links = []
+    for source in HOAXCHECK_SOURCES:
+        source_element = source[1]
+        source_url = source[2]
 
-    for source_name, search_base_url in sources:
-        try:
-            candidate_urls = _get_candidate_urls(search_base_url + query)
-            for url in candidate_urls:
-                article = _fetch_article(url)
-                if article and _is_similar(title, article.title):
-                    logger.info(f"[Scraper] Match ({source_name}): {article.title}")
-                    results.append({
-                        "url":     url,
-                        "title":   article.title,
-                        "content": article.text,
-                    })
-        except Exception as e:
-            logger.warning(f"[Scraper] Error di {source_name}: {e}")
+        for kw in title_kw:
+            final_url = source_url + kw[0]
 
-    logger.info(f"[Scraper] Total hasil trusted sources: {len(results)}")
-    return results
+            driver.get(final_url)
 
+            articles = []
+            contents = driver.find_elements(By.CLASS_NAME, source_element)
+            for content in contents:
+                articles.append(content.find_element(By.TAG_NAME, "a"))
+            
+            for article in articles:
+                link = article.get_attribute("href")
+                links.append(link)
 
-def _get_komdigi_listing() -> list[tuple]:
-    """
-    Ambil semua pasangan (judul, url) dari halaman listing Komdigi.
-    Return list of tuple: [(judul, url), ...]
-    """
-    resp = requests.get(KOMDIGI_URL, headers=_HEADERS, timeout=10)
-    resp.raise_for_status()
-    soup = BeautifulSoup(resp.text, "lxml")
+                if len(links) > 5:
+                    break
 
-    items = []
-    for a in soup.find_all("a", href=True):
-        href  = a["href"]
-        judul = a.get_text(strip=True)
+    driver.close()
 
-        # Ambil hanya link artikel Komdigi yang punya judul cukup panjang
-        if (
-            "komdigi.go.id" in href
-            and "/berita/" in href
-            and len(judul) > 20
-        ):
-            # Pastikan URL lengkap
-            if not href.startswith("http"):
-                href = "https://www.komdigi.go.id" + href
-            items.append((judul, href))
+    links = set(links)
 
-    return items
+    result = []
+    for link in links:
+        result.append(scrape_url(link))
 
-
-def _get_candidate_urls(search_url: str) -> list[str]:
-    """
-    Ambil URL kandidat dari halaman hasil pencarian portal berita.
-    Maksimal 5 URL.
-    """
-    try:
-        resp = requests.get(search_url, headers=_HEADERS, timeout=10)
-        resp.raise_for_status()
-        soup = BeautifulSoup(resp.text, "lxml")
-
-        urls = []
-        for a in soup.find_all("a", href=True):
-            href = a["href"]
-            if (
-                href.startswith("http")
-                and len(href) > 40
-                and href not in urls
-            ):
-                urls.append(href)
-            if len(urls) >= 5:
-                break
-
-        return urls
-
-    except Exception as e:
-        logger.warning(f"[Scraper] Gagal ambil hasil search {search_url}: {e}")
-        return []
-
-
-def _fetch_article(url: str):
-    """
-    Download dan parse satu artikel pakai newspaper3k.
-    Return Article object, atau None kalau gagal.
-    """
-    try:
-        article = Article(url, config=_config, language="id")
-        article.download()
-        article.parse()
-        return article
-    except Exception as e:
-        logger.warning(f"[Scraper] Gagal fetch {url}: {e}")
-        return None
-
-
-def _is_similar(title_a: str, title_b: str) -> bool:
-    """
-    Cek apakah dua judul cukup mirip pakai SequenceMatcher.
-    Threshold default: 0.5 (50%).
-    """
-    if not title_a or not title_b:
-        return False
-    ratio = SequenceMatcher(
-        None,
-        title_a.lower().strip(),
-        title_b.lower().strip()
-    ).ratio()
-    return ratio >= SIMILARITY_THRESHOLD
-
-
-def _build_query(title: str) -> str:
-    """Ambil 8 kata pertama judul lalu encode jadi query string URL."""
-    words = title.strip().split()[:8]
-    return urllib.parse.quote(" ".join(words))
+    return result
