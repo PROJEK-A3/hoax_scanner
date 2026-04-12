@@ -31,5 +31,5 @@ class Application:
         db_manager.insert_analisis(konten,skor,verdict.give_label(skor))  # type: ignore
         print(db_manager.get_all_analisis())
     
-if _name_ == "_main_":
+if __name__ == "__main__":
     Application().main()
