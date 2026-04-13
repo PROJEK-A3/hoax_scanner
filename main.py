@@ -17,14 +17,15 @@ class Application:
         konten = user_input["content"]
         url = user_input["url"]
 
-        trusted_sources = scraper.scrape_trusted_sources(judul)
         checkhoax = scraper.scrape_checkhoax(judul)
-        skor = verdict.evaluate(url, konten, trusted_sources)
 
         if checkhoax != []:
             print("Artikel tersebut terdeteksi hoax oleh checkhoax.id")
-            print("Tingkat similaritas:", verdict.calculate_similarity(konten, checkhoax))
+            skor = verdict.evaluate(url, konten, checkhoax)
+            print("level validitas:", skor)
         else:
+            trusted_sources = scraper.scrape_trusted_sources(judul)
+            skor = verdict.evaluate(url, konten, trusted_sources)
             print("level validitas:", skor)
 
         db_manager.connect()
