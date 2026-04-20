@@ -6,3 +6,4 @@ __pycache__/
 core/__pycache__
 .pytest_cache
 .vscode
+database/hoaxscan.db
