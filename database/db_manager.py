@@ -1,6 +1,6 @@
 import sqlite3
 from datetime import datetime
-from logger import setup_logger, get_logger
+from database.logger import setup_logger, get_logger
 
 # Setup logger
 setup_logger()
@@ -9,125 +9,176 @@ logger = get_logger()
 # Database path
 DB_NAME = "database/hoaxscan.db"
 
+
 class DatabaseManager:
     def __init__(self) -> None:
         """
         Menginisialisasi DatabaseManager dan memastikan tabel database yang diperlukan
         ('riwayat_analisis') telah dibuat jika belum ada.
         """
-        self.create_table() # Memastikan tabel dibuat saat objek diinisialisasi
+        logger.info("DB MANAGER INIT")
+        create_table()  
+
 
 # CONNECT
 def connect_db():
-    return sqlite3.connect(DB_NAME)
+    try:
+        logger.info("CONNECT DB START")
+        conn = sqlite3.connect(DB_NAME)
+        logger.info("CONNECT DB SUCCESS")
+        return conn
+    except Exception as e:
+        logger.error(f"CONNECT DB ERROR | {repr(e)}")
+        raise
 
 
 # CREATE TABLE
 def create_table():
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS riwayat_analisis (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        input_text TEXT,
-        skor INTEGER,
-        kategori TEXT,
-        tanggal DATETIME
-    )
-    """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS riwayat_analisis (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_text TEXT,
+            skor INTEGER,
+            kategori TEXT,
+            tanggal DATETIME
+        )
+        """)
 
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
 
-    
-    logger.info("CREATE TABLE riwayat_analisis")
+        logger.info("CREATE TABLE SUCCESS | riwayat_analisis")
+
+    except Exception as e:
+        logger.error(f"CREATE TABLE ERROR | {repr(e)}")
 
 
 # INSERT
 def insert_analisis(input_text: str, skor: int, kategori: str):
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.info(f"INSERT START | text='{input_text}'")
 
-    cursor.execute("""
-    INSERT INTO riwayat_analisis (input_text, skor, kategori, tanggal)
-    VALUES (?, ?, ?, ?)
-    """, (input_text, skor, kategori, datetime.now()))
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        cursor.execute("""
+        INSERT INTO riwayat_analisis (input_text, skor, kategori, tanggal)
+        VALUES (?, ?, ?, ?)
+        """, (input_text, skor, kategori, datetime.now()))
 
-    logger.info(f"INSERT | text='{input_text}' | skor={skor} | kategori={kategori}")
+        conn.commit()
+        conn.close()
+
+        logger.info(f"INSERT SUCCESS | skor={skor} | kategori={kategori}")
+
+    except Exception as e:
+        logger.error(f"INSERT ERROR | {repr(e)}")
 
 
 # GET ALL
 def get_all_analisis():
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.info("GET ALL START")
 
-    cursor.execute("SELECT * FROM riwayat_analisis")
-    data = cursor.fetchall()
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.close()
+        cursor.execute("SELECT * FROM riwayat_analisis")
+        data = cursor.fetchall()
 
-    logger.info("GET ALL DATA")
+        conn.close()
 
-    return data
+        logger.info(f"GET ALL SUCCESS | total={len(data)}")
+
+        return data
+
+    except Exception as e:
+        logger.error(f"GET ALL ERROR | {repr(e)}")
+        return []
 
 
 # GET BY ID
 def get_analisis_by_id(id: int):
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.info(f"GET BY ID START | id={id}")
 
-    cursor.execute("SELECT * FROM riwayat_analisis WHERE id = ?", (id,))
-    data = cursor.fetchone()
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.close()
+        cursor.execute("SELECT * FROM riwayat_analisis WHERE id = ?", (id,))
+        data = cursor.fetchone()
 
-    logger.info(f"GET BY ID | id={id}")
+        conn.close()
 
-    return data
+        logger.info(f"GET BY ID SUCCESS | found={data is not None}")
+
+        return data
+
+    except Exception as e:
+        logger.error(f"GET BY ID ERROR | {repr(e)}")
+        return None
 
 
 # UPDATE
 def update_analisis(id: int, skor: int, kategori: str):
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.info(f"UPDATE START | id={id}")
 
-    cursor.execute("""
-    UPDATE riwayat_analisis
-    SET skor = ?, kategori = ?
-    WHERE id = ?
-    """, (skor, kategori, id))
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        cursor.execute("""
+        UPDATE riwayat_analisis
+        SET skor = ?, kategori = ?
+        WHERE id = ?
+        """, (skor, kategori, id))
 
-    logger.info(f"UPDATE | id={id} | skor={skor} | kategori={kategori}")
+        conn.commit()
+        conn.close()
+
+        logger.info(f"UPDATE SUCCESS | skor={skor} | kategori={kategori}")
+
+    except Exception as e:
+        logger.error(f"UPDATE ERROR | {repr(e)}")
 
 
 # DELETE
 def delete_analisis(id: int):
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.warning(f"DELETE START | id={id}")
 
-    cursor.execute("DELETE FROM riwayat_analisis WHERE id = ?", (id,))
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        cursor.execute("DELETE FROM riwayat_analisis WHERE id = ?", (id,))
 
-    logger.warning(f"DELETE | id={id}")
+        conn.commit()
+        conn.close()
+
+        logger.warning(f"DELETE SUCCESS | id={id}")
+
+    except Exception as e:
+        logger.error(f"DELETE ERROR | {repr(e)}")
 
 
 # DELETE ALL
 def delete_all_analisis():
-    conn = connect_db()
-    cursor = conn.cursor()
+    try:
+        logger.warning("DELETE ALL START")
 
-    cursor.execute("DELETE FROM riwayat_analisis")
+        conn = connect_db()
+        cursor = conn.cursor()
 
-    conn.commit()
-    conn.close()
+        cursor.execute("DELETE FROM riwayat_analisis")
 
-    logger.warning("DELETE ALL DATA")
+        conn.commit()
+        conn.close()
+
+        logger.warning("DELETE ALL SUCCESS")
+
+    except Exception as e:
+        logger.error(f"DELETE ALL ERROR | {repr(e)}")
