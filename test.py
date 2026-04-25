@@ -17,7 +17,7 @@ from database.db_manager import (
     delete_analisis,
     delete_all_analisis
 )
-
+from utils.text_cleaner import TextCleaner
 
 # aktifin logger
 setup_logger()
@@ -138,3 +138,23 @@ if data:
 # delete_all_analisis()
 
 print("=== DONE DATABASE TEST ===")
+
+
+
+# TEXT CLEANER TEST
+
+cleaner = TextCleaner()
+
+# input test
+text = "Berita VIRAL!!! tentang penipuan online di media sosial 😱 123"
+
+# proses
+cleaned = cleaner.Cleaning(text)
+tokens = cleaner.Tokenize(cleaned)
+
+# output
+print("Original :", text)
+print("Cleaned  :", cleaned)
+print("Tokens   :", tokens)
+
+print("=== DONE TEXT CLEANER TEST ===")
