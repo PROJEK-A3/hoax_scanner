@@ -8,7 +8,15 @@ from core.keyword_extractor import KeywordExtractor
 from core.scraper import Scraper
 from core.similarity import SimilarityEngine
 from core.verdict import VerdictEngine
-
+from database.db_manager import (
+    DatabaseManager,
+    insert_analisis,
+    get_all_analisis,
+    get_analisis_by_id,
+    update_analisis,
+    delete_analisis,
+    delete_all_analisis
+)
 
 
 # aktifin logger
@@ -101,3 +109,32 @@ label = verdict.evaluate(url, text, trusted_articles, labeling=True)
 
 print("Final Score:", score)
 print("Label:", label)
+
+# DATABASE TEST
+# init (auto create table)
+db = DatabaseManager()
+
+# INSERT
+insert_analisis("berita hoax tentang politik", 7, "Tinggi")
+insert_analisis("informasi valid dari pemerintah", 2, "Rendah")
+
+# GET ALL
+data = get_all_analisis()
+print("ALL DATA:", data)
+
+# GET BY ID (ambil id pertama kalau ada)
+if data:
+    first_id = data[0][0]
+    one = get_analisis_by_id(first_id)
+    print("GET BY ID:", one)
+
+    # UPDATE
+    update_analisis(first_id, 5, "Sedang")
+
+    # DELETE (optional, coba kalau mau)
+    # delete_analisis(first_id)
+
+# DELETE ALL (optional, hati-hati )
+# delete_all_analisis()
+
+print("=== DONE DATABASE TEST ===")
