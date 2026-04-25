@@ -7,7 +7,7 @@ from database.logger import setup_logger
 from core.keyword_extractor import KeywordExtractor
 from core.scraper import Scraper
 from core.similarity import SimilarityEngine
-
+from core.verdict import VerdictEngine
 
 
 
@@ -80,3 +80,24 @@ avg_score = sim.get_average_score(ranked)
 
 print("Top:", top_score)
 print("Avg:", avg_score)
+
+
+# VERDICT TEST  
+verdict = VerdictEngine()
+
+url = "https://example.com"
+text = "Berita viral tentang penipuan online di media sosial"
+
+trusted_articles = [
+    {"content": "Kasus penipuan online meningkat di Indonesia"},
+    {"content": "Banyak masyarakat tertipu oleh berita hoax digital"}
+]
+
+# tanpa label
+score = verdict.evaluate(url, text, trusted_articles)
+
+# dengan label
+label = verdict.evaluate(url, text, trusted_articles, labeling=True)
+
+print("Final Score:", score)
+print("Label:", label)

@@ -5,6 +5,10 @@ from urllib.parse import urlparse
 from core.similarity import SimilarityEngine
 from core.keyword_extractor import KeywordExtractor
 
+from database.logger import get_logger
+
+logger = get_logger()
+
 with open('core/trusted_domain.json', 'r') as f:
     TRUSTED_DOMAIN = json.load(f)
     TRUSTED_DOMAIN = TRUSTED_DOMAIN["domain"]
@@ -31,6 +35,9 @@ class VerdictEngine:
         Menginisialisasi VerdictEngine dengan bobot yang telah ditentukan untuk setiap sinyal
         yang digunakan dalam evaluasi kredibilitas artikel.
         """
+
+        logger.info("VERDICT ENGINE INIT")
+
         self.weight = {
             "similarity": 0.40,  # Cosine similarity vs sumber terpercaya
             "domain": 0.25,  # Kredibilitas domain sumber
@@ -60,12 +67,23 @@ class VerdictEngine:
             float | str: Skor kredibilitas artikel (float antara 0.0 dan 1.0) jika `labeling` adalah False,
                          atau label "TINGGI"/"SEDANG"/"RENDAH" (str) jika `labeling` adalah True.
         """
+        
+        logger.info("EVALUATION START")
+
         signals = SignalScores()
         
         signals.domain = self.calculate_domain_age(url)
+        logger.info(f"DOMAIN SCORE | {signals.domain}")
+
         signals.source_citation = self.calculate_source_citation(input_text)
+        logger.info(f"CITATION SCORE | {signals.source_citation}")
+
+        keywords = KeywordExtractor().Extract(input_text)
         signals.sentiment = self.calculate_sentiment(KeywordExtractor().Extract(input_text))
+        logger.info(f"SENTIMENT SCORE | {signals.sentiment}")
+
         signals.similarity = self.calculate_similarity(input_text, trusted_articles)
+        logger.info(f"SIMILARITY SCORE | {signals.similarity}")
 
         final = (
             signals.domain * self.weight["domain"] +
@@ -76,12 +94,17 @@ class VerdictEngine:
 
         final = float(round(final,2))
 
+        logger.info(f"FINAL SCORE | {final}")
+
         if labeling == True:
             if final > 0.7:
+                logger.info(f"FINAL LABEL | RENDAH")
                 return "RENDAH"
             elif final > 0.4:
+                logger.info(f"FINAL LABEL | SEDANG")
                 return "SEDANG"
             else:
+                logger.info(f"FINAL LABEL | TINGGI")
                 return "TINGGI"
 
         return final
@@ -103,20 +126,31 @@ class VerdictEngine:
         Returns:
             float: Skor kredibilitas domain antara 0.0 dan 1.0.
         """
-        
-        domain = whois.whois(url)
-        domain_creation_date = domain.creation_date  # type: ignore
-        if isinstance(domain_creation_date, list):
-            domain_creation_date = domain_creation_date[0]
-            
-        if domain_creation_date == None:
-            return 0.0
-        
-        domain_age = datetime.now(timezone.utc) - domain_creation_date
 
-        if domain_age.days < 100:
-            return domain_age.days * 0.01
-        return 0.0
+        logger.info(f"DOMAIN CHECK | url={url}")
+
+        try:
+            domain = whois.whois(url)
+            domain_creation_date = domain.creation_date  # type: ignore
+
+            if isinstance(domain_creation_date, list):
+                domain_creation_date = domain_creation_date[0]
+                
+            if domain_creation_date == None:
+                logger.warning("DOMAIN CREATION DATE NONE")
+                return 0.0
+            
+            domain_age = datetime.now(timezone.utc) - domain_creation_date
+
+            logger.info(f"DOMAIN AGE | {domain_age.days} days")
+
+            if domain_age.days < 100:
+                return domain_age.days * 0.01
+            return 0.0
+
+        except Exception as e:
+            logger.error(f"DOMAIN ERROR | {repr(e)}")
+            return 0.0
     
     def calculate_sentiment(self, input_text:list[str]) ->float:
         """
@@ -129,7 +163,10 @@ class VerdictEngine:
         Returns:
             float: Skor sentimen antara 0.0 dan 1.0.
         """
+        logger.info("SENTIMENT CALCULATION START")
+
         if not input_text:
+            logger.warning("EMPTY INPUT SENTIMENT")
             return 1.0  # Dianggap netral jika tidak ada input
 
         found = 0
@@ -137,8 +174,12 @@ class VerdictEngine:
             if w in SENSATIONAL_WORD:
                 found+=1
         
-        return 1.0 * (len(input_text)-found/len(input_text))
-    
+        score = 1.0 * (len(input_text)-found/len(input_text))
+
+        logger.info(f"SENTIMENT RESULT | found={found} score={score}")
+
+        return score
+
     def calculate_similarity(self, input_text:str, trusted_articles:list[dict[str,str]]) -> float:
         """
         Menghitung skor kemiripan teks input dengan daftar artikel terpercaya.
@@ -151,16 +192,33 @@ class VerdictEngine:
         Returns:
             float: Skor kemiripan tertinggi antara 0.0 dan 1.0.
         """
+
+        logger.info("SIMILARITY AGGREGATION START")
+
         engine = SimilarityEngine()
+
+        if not trusted_articles:
+            logger.warning("NO TRUSTED ARTICLES")
+            return 0.0
+
         score = 0
         for art in trusted_articles:
-            score += engine.compute(input_text, art["content"])
+            s = engine.compute(input_text, art["content"])
+            logger.info(f"SIMILARITY PER ARTICLE | {s}")
+            score += s
 
-        return score/len(trusted_articles)
+        final_score = score/len(trusted_articles)
+
+        logger.info(f"SIMILARITY FINAL | {final_score}")
+
+        return final_score
 
     def calculate_source_citation(self, input_text:str):
         """
         """
+
+        logger.info("CITATION CHECK START")
+
         if not input_text:
             return 1.0 
 
@@ -168,6 +226,8 @@ class VerdictEngine:
         for w in input_text:
             if w in CITATION_WORD:
                 found+=1
+
+        logger.info(f"CITATION FOUND | {found}")
 
         if found == 0:
             return 0.0
@@ -179,6 +239,8 @@ class VerdictEngine:
             return 1.0
 
     def give_label(self, score:float)->str:
+        logger.info(f"LABELING | score={score}")
+        
         if score > 0.7:
             return "RENDAH"
         elif score > 0.4:
