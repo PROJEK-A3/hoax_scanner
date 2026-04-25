@@ -9,6 +9,13 @@ logger = get_logger()
 # Database path
 DB_NAME = "database/hoaxscan.db"
 
+class DatabaseManager:
+    def __init__(self) -> None:
+        """
+        Menginisialisasi DatabaseManager dan memastikan tabel database yang diperlukan
+        ('riwayat_analisis') telah dibuat jika belum ada.
+        """
+        self.create_table() # Memastikan tabel dibuat saat objek diinisialisasi
 
 # CONNECT
 def connect_db():
@@ -33,6 +40,7 @@ def create_table():
     conn.commit()
     conn.close()
 
+    
     logger.info("CREATE TABLE riwayat_analisis")
 
 
