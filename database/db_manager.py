@@ -1,9 +1,14 @@
-import sqlite3  # Mengimpor library SQLite untuk mengelola database
-from datetime import datetime  # Mengimpor datetime untuk mengambil waktu saat ini
+import sqlite3
+from datetime import datetime
+from database.logger import setup_logger, get_logger
 
-# Menyimpan nama dan lokasi database dalam variabel
-# agar tidak perlu menuliskan path database berulang kali
+# Setup logger
+setup_logger()
+logger = get_logger()
+
+# Database path
 DB_NAME = "database/hoaxscan.db"
+
 
 class DatabaseManager:
     def __init__(self) -> None:
@@ -11,130 +16,169 @@ class DatabaseManager:
         Menginisialisasi DatabaseManager dan memastikan tabel database yang diperlukan
         ('riwayat_analisis') telah dibuat jika belum ada.
         """
-        self.create_table() # Memastikan tabel dibuat saat objek diinisialisasi
+        logger.info("DB MANAGER INIT")
+        create_table()  
 
-    def connect(self):
-        """ 
-        Fungsi untuk membuat koneksi ke database SQLite.
-        Akan dipanggil setiap kali ingin melakukan operasi database.
-        """
-        return sqlite3.connect(DB_NAME)  # Menghubungkan ke file database
 
-    # CREATE TABLE
-    def create_table(self):
-        """
-        Fungsi untuk membuat tabel 'riwayat_analisis' jika belum ada.
-        Tabel ini digunakan untuk menyimpan hasil analisis artikel.
-        """
-        conn = self.connect()          # Membuka koneksi ke database
-        cursor = conn.cursor()    # Membuat cursor untuk menjalankan perintah SQL
+# CONNECT
+def connect_db():
+    try:
+        logger.info("CONNECT DB START")
+        conn = sqlite3.connect(DB_NAME)
+        logger.info("CONNECT DB SUCCESS")
+        return conn
+    except Exception as e:
+        logger.error(f"CONNECT DB ERROR | {repr(e)}")
+        raise
 
-        # Perintah SQL untuk membuat tabel
+
+# CREATE TABLE
+def create_table():
+    try:
+        conn = connect_db()
+        cursor = conn.cursor()
+
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS riwayat_analisis (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, 
-            input_text TEXT,                      
-            skor INTEGER,                         
-            kategori TEXT,                       
-            tanggal DATETIME                    
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_text TEXT,
+            skor INTEGER,
+            kategori TEXT,
+            tanggal DATETIME
         )
         """)
 
-        conn.commit()  # Menyimpan perubahan ke database
-        conn.close()   # Menutup koneksi database
+        conn.commit()
+        conn.close()
 
-    # ➕ CREATE (INSERT DATA)
-    def insert_analisis(self, input_text, skor, kategori):
-        """
-        Fungsi untuk MENYIMPAN hasil analisis ke database.
-        Ini merupakan bagian CREATE dalam konsep CRUD.
-        """
-        conn = self.connect()          # Membuka koneksi database
-        cursor = conn.cursor()    # Membuat cursor
+        logger.info("CREATE TABLE SUCCESS | riwayat_analisis")
 
-        # Perintah SQL untuk memasukkan data baru ke tabel
+    except Exception as e:
+        logger.error(f"CREATE TABLE ERROR | {repr(e)}")
+
+
+# INSERT
+def insert_analisis(input_text: str, skor: int, kategori: str):
+    try:
+        logger.info(f"INSERT START | text='{input_text}'")
+
+        conn = connect_db()
+        cursor = conn.cursor()
+
         cursor.execute("""
         INSERT INTO riwayat_analisis (input_text, skor, kategori, tanggal)
         VALUES (?, ?, ?, ?)
-        """, (
-            input_text,           # Data teks dari user
-            skor,                 # Skor hasil analisis
-            kategori,             # Kategori hasil analisis
-            datetime.now()        # Waktu saat data disimpan
-        ))
+        """, (input_text, skor, kategori, datetime.now()))
 
-        conn.commit()  # Menyimpan perubahan
-        conn.close()   # Menutup koneksi
+        conn.commit()
+        conn.close()
+
+        logger.info(f"INSERT SUCCESS | skor={skor} | kategori={kategori}")
+
+    except Exception as e:
+        logger.error(f"INSERT ERROR | {repr(e)}")
 
 
-    # READ (AMBIL SEMUA DATA)
-    def get_all_analisis(self):
-        """
-        Fungsi untuk MENGAMBIL semua data dari tabel.
-        Ini merupakan bagian READ dalam CRUD.
-        """
-        conn = self.connect()          # Membuka koneksi database
-        cursor = conn.cursor()    # Membuat cursor
+# GET ALL
+def get_all_analisis():
+    try:
+        logger.info("GET ALL START")
 
-        # Perintah SQL untuk mengambil semua data
+        conn = connect_db()
+        cursor = conn.cursor()
+
         cursor.execute("SELECT * FROM riwayat_analisis")
-        data = cursor.fetchall()  # Mengambil semua hasil query dalam bentuk list
+        data = cursor.fetchall()
 
-        conn.close()              # Menutup koneksi
-        return data               # Mengembalikan data ke program utama
+        conn.close()
+
+        logger.info(f"GET ALL SUCCESS | total={len(data)}")
+
+        return data
+
+    except Exception as e:
+        logger.error(f"GET ALL ERROR | {repr(e)}")
+        return []
 
 
-    # READ (AMBIL BERDASARKAN ID)
-    def get_analisis_by_id(self, id):
-        """
-        Fungsi untuk mengambil satu data berdasarkan ID tertentu.
-        Digunakan untuk melihat detail hasil analisis.
-        """
-        conn = self.connect()          # Membuka koneksi database
-        cursor = conn.cursor()    # Membuat cursor
+# GET BY ID
+def get_analisis_by_id(id: int):
+    try:
+        logger.info(f"GET BY ID START | id={id}")
 
-        # Perintah SQL untuk mengambil data berdasarkan ID
+        conn = connect_db()
+        cursor = conn.cursor()
+
         cursor.execute("SELECT * FROM riwayat_analisis WHERE id = ?", (id,))
-        data = cursor.fetchone()  # Mengambil satu data saja
+        data = cursor.fetchone()
 
-        conn.close()              # Menutup koneksi
-        return data               # Mengembalikan hasil
+        conn.close()
+
+        logger.info(f"GET BY ID SUCCESS | found={data is not None}")
+
+        return data
+
+    except Exception as e:
+        logger.error(f"GET BY ID ERROR | {repr(e)}")
+        return None
 
 
-    # ✏️ UPDATE (UBAH DATA)
-    def update_analisis(self, id, skor, kategori):
-        """
-        Fungsi untuk MENGUBAH data analisis berdasarkan ID.
-        Ini merupakan bagian UPDATE dalam CRUD.
-        """
-        conn = self.connect()          # Membuka koneksi database
-        cursor = conn.cursor()    # Membuat cursor
+# UPDATE
+def update_analisis(id: int, skor: int, kategori: str):
+    try:
+        logger.info(f"UPDATE START | id={id}")
+
+        conn = connect_db()
+        cursor = conn.cursor()
 
         cursor.execute("""
         UPDATE riwayat_analisis
         SET skor = ?, kategori = ?
         WHERE id = ?
-        """, (
-            skor,                 # Skor baru
-            kategori,             # Kategori baru
-            id                    # ID data yang ingin diubah
-        ))
+        """, (skor, kategori, id))
 
-        conn.commit()  # Menyimpan perubahan
-        conn.close()   # Menutup koneksi
+        conn.commit()
+        conn.close()
+
+        logger.info(f"UPDATE SUCCESS | skor={skor} | kategori={kategori}")
+
+    except Exception as e:
+        logger.error(f"UPDATE ERROR | {repr(e)}")
 
 
-    # DELETE (HAPUS DATA)
-    def delete_analisis(self, id):
-        """
-        Fungsi untuk MENGHAPUS data berdasarkan ID.
-        Ini merupakan bagian DELETE dalam CRUD.
-        """
-        conn = self.connect()          # Membuka koneksi database
-        cursor = conn.cursor()    # Membuat cursor
+# DELETE
+def delete_analisis(id: int):
+    try:
+        logger.warning(f"DELETE START | id={id}")
 
-        # Perintah SQL untuk menghapus data berdasarkan ID
+        conn = connect_db()
+        cursor = conn.cursor()
+
         cursor.execute("DELETE FROM riwayat_analisis WHERE id = ?", (id,))
 
-        conn.commit()  # Menyimpan perubahan
-        conn.close()   # Menutup koneksi
+        conn.commit()
+        conn.close()
+
+        logger.warning(f"DELETE SUCCESS | id={id}")
+
+    except Exception as e:
+        logger.error(f"DELETE ERROR | {repr(e)}")
+
+
+# DELETE ALL
+def delete_all_analisis():
+    try:
+        logger.warning("DELETE ALL START")
+
+        conn = connect_db()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM riwayat_analisis")
+
+        conn.commit()
+        conn.close()
+
+        logger.warning("DELETE ALL SUCCESS")
+
+    except Exception as e:
+        logger.error(f"DELETE ALL ERROR | {repr(e)}")
