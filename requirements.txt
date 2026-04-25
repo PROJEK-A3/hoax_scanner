@@ -1,6 +1,23 @@
+# Core
 newspaper3k
-pyqt5
 requests
 yake
-lxml_html_clean
 selenium
+
+# NLP
+nltk
+Sastrawi
+
+# ML
+scikit-learn
+
+# Database & parsing
+lxml
+lxml_html_clean
+beautifulsoup4
+
+# Domain
+python-whois
+
+# UI
+pyqt5
